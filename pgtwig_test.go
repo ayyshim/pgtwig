@@ -255,6 +255,16 @@ func TestInitDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestFindOrphans(t *testing.T) {
+	mainSnap := pg.BranchDBName("app", "main")
+	oldSnap := pg.BranchDBName("app", "old-branch")
+
+	got := cli.FindOrphans("app", []string{mainSnap, oldSnap}, []string{"main"})
+	if len(got) != 1 || got[0] != oldSnap {
+		t.Fatalf("got %v, want [%s]", got, oldSnap)
+	}
+}
+
 func TestHelp(t *testing.T) {
 	app, out, _ := newTestApp(&stubGit{}, nil, true)
 	if code := app.Run([]string{"--help"}); code != 0 {

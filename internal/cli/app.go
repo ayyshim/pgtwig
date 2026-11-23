@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -57,6 +58,12 @@ func (a *App) Run(args []string) int {
 		return 0
 	case "init":
 		err = a.cmdInit(args[1:])
+	case "list":
+		err = a.cmdList(args[1:])
+	case "reset":
+		err = a.cmdReset(args[1:])
+	case "clean":
+		err = a.cmdClean(args[1:])
 	default:
 		fmt.Fprintf(a.ErrOut, "Error: unknown command %q\n\n", args[0])
 		a.printHelp(a.ErrOut)
@@ -85,6 +92,32 @@ func (a *App) parseFlags(fs *flag.FlagSet, args []string) (help bool, err error)
 	}
 
 	return false, nil
+}
+
+func (a *App) openPG(cfg git.Config) (pg.Client, error) {
+	if cfg.Container != "" {
+		running, err := a.Docker(cfg.Container)
+		if err != nil {
+			return pg.Client{}, fmt.Errorf("check container %s: %w", cfg.Container, err)
+		}
+		if !running {
+			return pg.Client{}, fmt.Errorf("container %s is not running", cfg.Container)
+		}
+	}
+
+	return a.PG(cfg), nil
+}
+
+func (a *App) confirm(prompt string) (bool, error) {
+	fmt.Fprintf(a.Out, "%s [y/N]: ", prompt)
+
+	line, err := bufio.NewReader(a.In).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+
+	ans := strings.ToLower(strings.TrimSpace(line))
+	return ans == "y" || ans == "yes", nil
 }
 
 func (a *App) printHelp(w io.Writer) {
