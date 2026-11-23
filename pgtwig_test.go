@@ -5,10 +5,14 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"pgtwig/internal/cli"
+	"pgtwig/internal/git"
 	"pgtwig/internal/pg"
 )
 
@@ -68,6 +72,48 @@ func TestSQLQuoting(t *testing.T) {
 	}
 	if got := pg.QuoteLiteral("o'reilly"); got != `'o''reilly'` {
 		t.Errorf("QuoteLiteral = %q", got)
+	}
+}
+
+func TestHookInstall(t *testing.T) {
+	dir := t.TempDir()
+
+	path, changed, err := git.InstallHook(dir)
+	if err != nil || !changed {
+		t.Fatalf("first install: changed=%v err=%v", changed, err)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(body), "#!/bin/sh\n") || !strings.Contains(string(body), `pgtwig _hook "$1" "$2"`) {
+		t.Fatalf("unexpected hook:\n%s", body)
+	}
+	if runtime.GOOS != "windows" {
+		info, _ := os.Stat(path)
+		if info.Mode().Perm()&0o111 == 0 {
+			t.Fatalf("hook not executable: %o", info.Mode().Perm())
+		}
+	}
+
+	_, changed, err = git.InstallHook(dir)
+	if err != nil || changed {
+		t.Fatalf("reinstall should be a no-op: changed=%v err=%v", changed, err)
+	}
+
+	// Appending preserves existing content without trailing newline.
+	dir2 := t.TempDir()
+	hook2 := filepath.Join(dir2, "hooks", "post-checkout")
+	_ = os.MkdirAll(filepath.Dir(hook2), 0o755)
+	_ = os.WriteFile(hook2, []byte("#!/bin/sh\necho hi"), 0o644)
+
+	if _, changed, err := git.InstallHook(dir2); err != nil || !changed {
+		t.Fatalf("append install: changed=%v err=%v", changed, err)
+	}
+	merged, _ := os.ReadFile(hook2)
+	if !strings.HasPrefix(string(merged), "#!/bin/sh\necho hi\n") || strings.Count(string(merged), "pgtwig _hook") != 1 {
+		t.Fatalf("existing hook not preserved:\n%s", merged)
 	}
 }
 
