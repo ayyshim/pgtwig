@@ -1,0 +1,14 @@
+# Binaries
+/pgtwig
+/pgtwig.exe
+dist/
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.env
