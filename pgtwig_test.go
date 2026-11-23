@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -67,6 +68,46 @@ func TestSQLQuoting(t *testing.T) {
 	}
 	if got := pg.QuoteLiteral("o'reilly"); got != `'o''reilly'` {
 		t.Errorf("QuoteLiteral = %q", got)
+	}
+}
+
+func TestPsqlCommand(t *testing.T) {
+	bin, args, env := pg.BuildCommand("my-pg", "postgres", "secret")
+	if bin != "docker" || len(env) != 0 {
+		t.Fatalf("bin=%q env=%v", bin, env)
+	}
+	for _, a := range args {
+		if a == "-t" || a == "-it" || a == "--tty" {
+			t.Fatalf("unexpected tty flag in %v", args)
+		}
+	}
+	if args[0] != "exec" || args[1] != "-i" || !strings.Contains(strings.Join(args, " "), "-e PGPASSWORD=secret") {
+		t.Fatalf("unexpected docker args: %v", args)
+	}
+
+	bin, args, env = pg.BuildCommand("", "alice", "pw")
+	if bin != "psql" || len(env) != 1 || env[0] != "PGPASSWORD=pw" {
+		t.Fatalf("bin=%q args=%v env=%v", bin, args, env)
+	}
+}
+
+func TestCloneFallback(t *testing.T) {
+	var queries []string
+	c := pg.Client{
+		Exec: func(sql string) (string, error) {
+			queries = append(queries, strings.TrimSpace(sql))
+			if strings.Contains(sql, "STRATEGY = FILE_COPY") {
+				return "", errors.New(`ERROR: syntax error at or near "STRATEGY"`)
+			}
+			return "", nil
+		},
+	}
+
+	if err := c.Clone("myapp", "myapp-abc12345"); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 3 || queries[2] != `CREATE DATABASE "myapp" TEMPLATE "myapp-abc12345";` {
+		t.Fatalf("unexpected queries: %v", queries)
 	}
 }
 
