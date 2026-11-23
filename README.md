@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/PostgreSQL-12+-4169E1?style=flat&logo=postgresql&logoColor=white" alt="PostgreSQL" />
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-64748B?style=flat" alt="macOS | Linux | Windows" />
   <img src="https://img.shields.io/badge/dependencies-0-22C55E?style=flat" alt="Zero Dependencies" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat" alt="MIT License" /></a>
 </p>
 
 ---
