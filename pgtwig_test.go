@@ -17,12 +17,13 @@ import (
 )
 
 type stubGit struct {
-	inRepo   bool
-	dir      string
-	branch   string
-	branches []string
-	cfg      git.Config
-	saved    bool
+	inRepo     bool
+	dir        string
+	branch     string
+	branches   []string
+	cfg        git.Config
+	saved      bool
+	isAncestor bool
 }
 
 func (s *stubGit) InsideWorkTree() bool { return s.inRepo }
@@ -57,6 +58,8 @@ func (s *stubGit) CurrentBranch(fallback string) (string, error) {
 }
 
 func (s *stubGit) Branches() ([]string, error) { return s.branches, nil }
+
+func (s *stubGit) IsAncestor(prevSHA, newSHA string) bool { return s.isAncestor }
 
 func newTestApp(g *stubGit, execSQL func(string) (string, error), dockerRunning bool) (*cli.App, *bytes.Buffer, *bytes.Buffer) {
 	var out, errOut bytes.Buffer
@@ -255,6 +258,36 @@ func TestInitDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestSelectTemplate(t *testing.T) {
+	prevSnap := pg.BranchDBName("myapp", "feature/a")
+	defaultSnap := pg.BranchDBName("myapp", "main")
+
+	cases := []struct {
+		name       string
+		isAncestor bool
+		dbs        map[string]bool
+		want       string
+	}{
+		{"ancestor exists", true, map[string]bool{prevSnap: true, defaultSnap: true}, prevSnap},
+		{"ancestor missing", true, map[string]bool{defaultSnap: true}, defaultSnap},
+		{"non-ancestor uses default", false, map[string]bool{prevSnap: true, defaultSnap: true}, defaultSnap},
+		{"non-ancestor fallback to prev", false, map[string]bool{prevSnap: true}, prevSnap},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cli.SelectTemplate(
+				"myapp", "feature/a", "main", "111", "222",
+				func(string, string) bool { return tc.isAncestor },
+				func(name string) (bool, error) { return tc.dbs[name], nil },
+			)
+			if err != nil || got != tc.want {
+				t.Fatalf("got (%q, %v), want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
 func TestHookSwap(t *testing.T) {
 	t.Run("stopped container skips swap", func(t *testing.T) {
 		g := &stubGit{
@@ -282,6 +315,46 @@ func TestHookSwap(t *testing.T) {
 		app.Run([]string{"_hook", "111", "222"})
 		if g.cfg.CurrentBranch != "feature/a" {
 			t.Fatalf("CurrentBranch = %q, want feature/a", g.cfg.CurrentBranch)
+		}
+	})
+
+	t.Run("non-ancestor clones from default snapshot", func(t *testing.T) {
+		prevSnap := pg.BranchDBName("myapp", "feature/a")
+		defaultSnap := pg.BranchDBName("myapp", "main")
+		dbs := map[string]bool{"myapp": true, defaultSnap: true}
+		var cloneSQL string
+
+		g := &stubGit{
+			branch:     "feature/b",
+			isAncestor: false,
+			cfg:        git.Config{DBName: "myapp", DefaultBranch: "main", CurrentBranch: "feature/a"},
+		}
+		app, _, errOut := newTestApp(g, func(sql string) (string, error) {
+			if strings.HasPrefix(sql, "SELECT 1") {
+				for name := range dbs {
+					if strings.Contains(sql, pg.QuoteLiteral(name)) {
+						return "1", nil
+					}
+				}
+				return "", nil
+			}
+			if strings.Contains(sql, "RENAME TO "+pg.QuoteIdent(prevSnap)) {
+				delete(dbs, "myapp")
+				dbs[prevSnap] = true
+			}
+			if strings.HasPrefix(sql, "CREATE DATABASE") {
+				cloneSQL = sql
+				dbs["myapp"] = true
+			}
+			return "", nil
+		}, true)
+
+		app.Run([]string{"_hook", "111", "222"})
+		if g.cfg.CurrentBranch != "feature/b" {
+			t.Fatalf("CurrentBranch = %q, want feature/b", g.cfg.CurrentBranch)
+		}
+		if !strings.Contains(cloneSQL, pg.QuoteIdent(defaultSnap)) || !strings.Contains(errOut.String(), defaultSnap) {
+			t.Fatalf("expected clone from %q, sql=%q log=%q", defaultSnap, cloneSQL, errOut.String())
 		}
 	})
 

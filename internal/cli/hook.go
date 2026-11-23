@@ -7,8 +7,41 @@ import (
 	"pgtwig/internal/pg"
 )
 
+func SelectTemplate(
+	dbName, prevBranch, defaultBranch, prevSHA, newSHA string,
+	isAncestor func(prevSHA, newSHA string) bool,
+	exists func(db string) (bool, error),
+) (string, error) {
+	prevSnap := pg.BranchDBName(dbName, prevBranch)
+	defaultSnap := pg.BranchDBName(dbName, defaultBranch)
+
+	first, second := defaultSnap, prevSnap
+	if prevSHA != "" && newSHA != "" && isAncestor(prevSHA, newSHA) {
+		first, second = prevSnap, defaultSnap
+	}
+
+	if ok, err := exists(first); err != nil {
+		return "", err
+	} else if ok {
+		return first, nil
+	}
+
+	if second != first {
+		if ok, err := exists(second); err != nil {
+			return "", err
+		} else if ok {
+			return second, nil
+		}
+	}
+
+	return "", fmt.Errorf("no template snapshot found (%s or %s)", first, second)
+}
+
 func (a *App) cmdHook(args []string) error {
-	var newSHA string
+	var prevSHA, newSHA string
+	if len(args) >= 1 {
+		prevSHA = args[0]
+	}
 	if len(args) >= 2 {
 		newSHA = args[1]
 	}
@@ -82,8 +115,15 @@ func (a *App) cmdHook(args []string) error {
 		}
 		fmt.Fprintf(a.ErrOut, "pgtwig: restored %q for branch %q\n", cfg.DBName, newBranch)
 	} else {
-		fmt.Fprintf(a.ErrOut, "pgtwig: cloning %q from %q\n", cfg.DBName, prevSnap)
-		if err := db.Clone(cfg.DBName, prevSnap); err != nil {
+		tmpl, err := SelectTemplate(cfg.DBName, prevBranch, cfg.DefaultBranch, prevSHA, newSHA, a.Git.IsAncestor, db.Exists)
+		if err != nil {
+			_ = db.Rename(prevSnap, cfg.DBName)
+			fmt.Fprintf(a.ErrOut, "pgtwig: %v\n", err)
+			return nil
+		}
+
+		fmt.Fprintf(a.ErrOut, "pgtwig: cloning %q from %q\n", cfg.DBName, tmpl)
+		if err := db.Clone(cfg.DBName, tmpl); err != nil {
 			_ = db.Rename(prevSnap, cfg.DBName)
 			fmt.Fprintf(a.ErrOut, "pgtwig: clone failed: %v\n", err)
 			return nil

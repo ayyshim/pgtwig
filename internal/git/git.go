@@ -180,3 +180,11 @@ func (c Client) Branches() ([]string, error) {
 	}
 	return branches, nil
 }
+
+func (c Client) IsAncestor(prevSHA, newSHA string) bool {
+	if prevSHA == "" || newSHA == "" {
+		return false
+	}
+	_, err := c.run("merge-base", "--is-ancestor", prevSHA, newSHA)
+	return err == nil
+}

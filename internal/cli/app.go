@@ -21,6 +21,7 @@ type Git interface {
 	SetConfig(key, val string) error
 	CurrentBranch(fallbackSHA string) (string, error)
 	Branches() ([]string, error)
+	IsAncestor(prevSHA, newSHA string) bool
 }
 
 type App struct {
