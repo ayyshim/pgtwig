@@ -255,6 +255,72 @@ func TestInitDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestHookSwap(t *testing.T) {
+	t.Run("stopped container skips swap", func(t *testing.T) {
+		g := &stubGit{
+			branch: "feature/a",
+			cfg:    git.Config{DBName: "myapp", DefaultBranch: "main", CurrentBranch: "main", Container: "pg16"},
+		}
+		calledSQL := false
+		app, _, _ := newTestApp(g, func(string) (string, error) { calledSQL = true; return "", nil }, false)
+
+		if code := app.Run([]string{"_hook", "111", "222"}); code != 0 {
+			t.Fatalf("exit code = %d", code)
+		}
+		if calledSQL || g.cfg.CurrentBranch != "main" {
+			t.Fatalf("should not touch pg or branch when container is stopped")
+		}
+	})
+
+	t.Run("missing base db updates branch", func(t *testing.T) {
+		g := &stubGit{
+			branch: "feature/a",
+			cfg:    git.Config{DBName: "myapp", DefaultBranch: "main", CurrentBranch: "main"},
+		}
+		app, _, _ := newTestApp(g, func(string) (string, error) { return "", nil }, true)
+
+		app.Run([]string{"_hook", "111", "222"})
+		if g.cfg.CurrentBranch != "feature/a" {
+			t.Fatalf("CurrentBranch = %q, want feature/a", g.cfg.CurrentBranch)
+		}
+	})
+
+	t.Run("restores existing snapshot", func(t *testing.T) {
+		prevSnap := pg.BranchDBName("myapp", "feature/a")
+		targetSnap := pg.BranchDBName("myapp", "main")
+		dbs := map[string]bool{"myapp": true, targetSnap: true}
+
+		g := &stubGit{
+			branch: "main",
+			cfg:    git.Config{DBName: "myapp", DefaultBranch: "main", CurrentBranch: "feature/a"},
+		}
+		app, _, _ := newTestApp(g, func(sql string) (string, error) {
+			if strings.HasPrefix(sql, "SELECT 1") {
+				for name := range dbs {
+					if strings.Contains(sql, pg.QuoteLiteral(name)) {
+						return "1", nil
+					}
+				}
+				return "", nil
+			}
+			if strings.Contains(sql, "RENAME TO "+pg.QuoteIdent(prevSnap)) {
+				delete(dbs, "myapp")
+				dbs[prevSnap] = true
+			}
+			if strings.Contains(sql, pg.QuoteIdent(targetSnap)+" RENAME TO") {
+				delete(dbs, targetSnap)
+				dbs["myapp"] = true
+			}
+			return "", nil
+		}, true)
+
+		app.Run([]string{"_hook", "111", "222"})
+		if !dbs["myapp"] || !dbs[prevSnap] || dbs[targetSnap] || g.cfg.CurrentBranch != "main" {
+			t.Fatalf("unexpected state: dbs=%v branch=%q", dbs, g.cfg.CurrentBranch)
+		}
+	})
+}
+
 func TestFindOrphans(t *testing.T) {
 	mainSnap := pg.BranchDBName("app", "main")
 	oldSnap := pg.BranchDBName("app", "old-branch")

@@ -64,6 +64,8 @@ func (a *App) Run(args []string) int {
 		err = a.cmdReset(args[1:])
 	case "clean":
 		err = a.cmdClean(args[1:])
+	case "_hook":
+		err = a.cmdHook(args[1:])
 	default:
 		fmt.Fprintf(a.ErrOut, "Error: unknown command %q\n\n", args[0])
 		a.printHelp(a.ErrOut)
