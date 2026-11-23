@@ -16,6 +16,63 @@ import (
 	"pgtwig/internal/pg"
 )
 
+type stubGit struct {
+	inRepo   bool
+	dir      string
+	branch   string
+	branches []string
+	cfg      git.Config
+	saved    bool
+}
+
+func (s *stubGit) InsideWorkTree() bool { return s.inRepo }
+
+func (s *stubGit) GitDir() (string, error) {
+	if !s.inRepo {
+		return "", errors.New("current directory is not inside a Git repository")
+	}
+	return s.dir, nil
+}
+
+func (s *stubGit) LoadConfig() (git.Config, error) { return s.cfg, nil }
+
+func (s *stubGit) SaveConfig(cfg git.Config) error {
+	s.saved = true
+	s.cfg = cfg
+	return nil
+}
+
+func (s *stubGit) SetConfig(key, val string) error {
+	if key == git.KeyCurrentBranch {
+		s.cfg.CurrentBranch = val
+	}
+	return nil
+}
+
+func (s *stubGit) CurrentBranch(fallback string) (string, error) {
+	if s.branch != "" {
+		return s.branch, nil
+	}
+	return fallback, nil
+}
+
+func (s *stubGit) Branches() ([]string, error) { return s.branches, nil }
+
+func newTestApp(g *stubGit, execSQL func(string) (string, error), dockerRunning bool) (*cli.App, *bytes.Buffer, *bytes.Buffer) {
+	var out, errOut bytes.Buffer
+	app := &cli.App{
+		Git:    g,
+		In:     strings.NewReader(""),
+		Out:    &out,
+		ErrOut: &errOut,
+		PG: func(cfg git.Config) pg.Client {
+			return pg.Client{User: cfg.User, Container: cfg.Container, Exec: execSQL}
+		},
+		Docker: func(string) (bool, error) { return dockerRunning, nil },
+	}
+	return app, &out, &errOut
+}
+
 func TestBranchHash(t *testing.T) {
 	sum := sha1.Sum([]byte("feature/auth"))
 	want := hex.EncodeToString(sum[:])
@@ -157,10 +214,49 @@ func TestCloneFallback(t *testing.T) {
 	}
 }
 
-func TestHelp(t *testing.T) {
-	var out, errOut bytes.Buffer
-	app := &cli.App{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}
+func TestInitOutsideGit(t *testing.T) {
+	dir := t.TempDir()
+	g := &stubGit{inRepo: false, dir: filepath.Join(dir, ".git")}
+	app, _, errOut := newTestApp(g, nil, true)
 
+	code := app.Run([]string{"init", "--db", "myapp"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "Error: current directory is not inside a Git repository") {
+		t.Fatalf("unexpected stderr: %q", errOut.String())
+	}
+	if g.saved {
+		t.Fatal("config should not be saved outside a git repo")
+	}
+}
+
+func TestInitDefaultBranch(t *testing.T) {
+	// Infers default branch from HEAD when omitted.
+	g := &stubGit{inRepo: true, dir: t.TempDir(), branch: "develop"}
+	app, _, errOut := newTestApp(g, nil, true)
+
+	if code := app.Run([]string{"init", "--db", "shop"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if g.cfg.DefaultBranch != "develop" || g.cfg.CurrentBranch != "develop" {
+		t.Fatalf("unexpected branches: %+v", g.cfg)
+	}
+
+	// Respects explicit --default-branch.
+	g2 := &stubGit{inRepo: true, dir: t.TempDir(), branch: "feature/cart"}
+	app2, _, errOut2 := newTestApp(g2, nil, true)
+
+	if code := app2.Run([]string{"init", "--db", "shop", "--default-branch", "main", "--container", "pg16"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut2.String())
+	}
+	if g2.cfg.DefaultBranch != "main" || g2.cfg.CurrentBranch != "feature/cart" || g2.cfg.Container != "pg16" {
+		t.Fatalf("unexpected config: %+v", g2.cfg)
+	}
+}
+
+func TestHelp(t *testing.T) {
+	app, out, _ := newTestApp(&stubGit{}, nil, true)
 	if code := app.Run([]string{"--help"}); code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
