@@ -62,19 +62,17 @@ func (a *App) cmdHook(args []string) error {
 		return nil
 	}
 
-	if cfg.Container != "" {
-		running, err := a.Docker(cfg.Container)
-		if err != nil || !running {
-			fmt.Fprintf(a.ErrOut, "pgtwig: container %q is not running, skipping swap\n", cfg.Container)
-			return nil
-		}
+	// openPG selects the configured database driver (PostgreSQL by default,
+	// MySQL when configured) and checks any configured Docker container.
+	db, err := a.openPG(cfg)
+	if err != nil {
+		fmt.Fprintf(a.ErrOut, "pgtwig: database unavailable (%v), skipping swap\n", err)
+		return nil
 	}
-
-	db := a.PG(cfg)
 
 	baseExists, err := db.Exists(cfg.DBName)
 	if err != nil {
-		fmt.Fprintf(a.ErrOut, "pgtwig: postgres unreachable (%v), skipping swap\n", err)
+		fmt.Fprintf(a.ErrOut, "pgtwig: database unavailable (%v), skipping swap\n", err)
 		return nil
 	}
 	if !baseExists {
