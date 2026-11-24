@@ -186,20 +186,32 @@ func (c Client) Clone(target, template string) error {
 	if err := c.Terminate(template); err != nil {
 		return err
 	}
-	if _, err := c.execSQL(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s;\n", QuoteIdent(target))); err != nil {
-		return err
-	}
+
 	tables, err := c.listTables(template)
 	if err != nil {
 		return err
 	}
-	for _, name := range tables {
-		if _, err := c.execSQL(fmt.Sprintf("CREATE TABLE %s.%s LIKE %s.%s;\n", QuoteIdent(target), QuoteIdent(name), QuoteIdent(template), QuoteIdent(name))); err != nil {
-			return err
+
+	var b strings.Builder
+	b.WriteString("SET SESSION foreign_key_checks = 0;\n")
+	b.WriteString("SET SESSION unique_checks = 0;\n")
+	fmt.Fprintf(&b, "CREATE DATABASE IF NOT EXISTS %s;\n", QuoteIdent(target))
+
+	if len(tables) > 0 {
+		targetQ, tmplQ := QuoteIdent(target), QuoteIdent(template)
+		for _, t := range tables {
+			tq := QuoteIdent(t)
+			fmt.Fprintf(&b, "CREATE TABLE %s.%s LIKE %s.%s;\n", targetQ, tq, tmplQ, tq)
 		}
-		if _, err := c.execSQL(fmt.Sprintf("INSERT INTO %s.%s SELECT * FROM %s.%s;\n", QuoteIdent(target), QuoteIdent(name), QuoteIdent(template), QuoteIdent(name))); err != nil {
-			return err
+
+		b.WriteString("SET SESSION autocommit = 0;\n")
+		for _, t := range tables {
+			tq := QuoteIdent(t)
+			fmt.Fprintf(&b, "INSERT INTO %s.%s SELECT * FROM %s.%s;\n", targetQ, tq, tmplQ, tq)
 		}
+		b.WriteString("COMMIT;\n")
 	}
-	return nil
+
+	_, err = c.execSQL(b.String())
+	return err
 }

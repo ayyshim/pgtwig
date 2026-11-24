@@ -265,6 +265,44 @@ func TestMySQLBatchedOps(t *testing.T) {
 			t.Fatalf("unexpected rename batch:\n%s", calls[2])
 		}
 	})
+
+	t.Run("clone batches DDL and fast-load inserts", func(t *testing.T) {
+		var calls []string
+		c := mysql.Client{
+			Exec: func(sql string) (string, error) {
+				calls = append(calls, strings.TrimSpace(sql))
+				if strings.Contains(sql, "information_schema.tables") {
+					return "orders\nusers", nil
+				}
+				return "", nil
+			},
+		}
+
+		if err := c.Clone("app", "app-deadbeef"); err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 3 {
+			t.Fatalf("expected 3 exec calls (terminate, listTables, batch clone), got %d: %v", len(calls), calls)
+		}
+		batch := calls[2]
+		for _, want := range []string{
+			"SET SESSION foreign_key_checks = 0;",
+			"SET SESSION unique_checks = 0;",
+			"CREATE TABLE `app`.`orders` LIKE `app-deadbeef`.`orders`;",
+			"CREATE TABLE `app`.`users` LIKE `app-deadbeef`.`users`;",
+			"SET SESSION autocommit = 0;",
+			"INSERT INTO `app`.`orders` SELECT * FROM `app-deadbeef`.`orders`;",
+			"INSERT INTO `app`.`users` SELECT * FROM `app-deadbeef`.`users`;",
+			"COMMIT;",
+		} {
+			if !strings.Contains(batch, want) {
+				t.Fatalf("clone batch missing %q:\n%s", want, batch)
+			}
+		}
+		if strings.Index(batch, "CREATE TABLE `app`.`users`") > strings.Index(batch, "SET SESSION autocommit = 0;") {
+			t.Fatalf("all CREATE TABLE DDL should run before autocommit = 0:\n%s", batch)
+		}
+	})
 }
 
 func TestInitOutsideGit(t *testing.T) {
