@@ -13,6 +13,7 @@ import (
 
 	"pgtwig/internal/cli"
 	"pgtwig/internal/git"
+	"pgtwig/internal/mysql"
 	"pgtwig/internal/pg"
 )
 
@@ -215,6 +216,31 @@ func TestCloneFallback(t *testing.T) {
 	if len(queries) != 3 || queries[2] != `CREATE DATABASE "myapp" TEMPLATE "myapp-abc12345";` {
 		t.Fatalf("unexpected queries: %v", queries)
 	}
+}
+
+func TestMySQLBatchedOps(t *testing.T) {
+	t.Run("terminate batches KILL statements", func(t *testing.T) {
+		var calls []string
+		c := mysql.Client{
+			Exec: func(sql string) (string, error) {
+				calls = append(calls, strings.TrimSpace(sql))
+				if strings.Contains(sql, "information_schema.processlist") {
+					return "101\n102\n103", nil
+				}
+				return "", nil
+			},
+		}
+
+		if err := c.Terminate("app"); err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 2 {
+			t.Fatalf("expected 2 exec calls, got %d: %v", len(calls), calls)
+		}
+		if calls[1] != "KILL 101;\nKILL 102;\nKILL 103;" {
+			t.Fatalf("unexpected kill batch:\n%s", calls[1])
+		}
+	})
 }
 
 func TestInitOutsideGit(t *testing.T) {
