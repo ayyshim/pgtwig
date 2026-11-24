@@ -241,6 +241,30 @@ func TestMySQLBatchedOps(t *testing.T) {
 			t.Fatalf("unexpected kill batch:\n%s", calls[1])
 		}
 	})
+
+	t.Run("rename uses single atomic RENAME TABLE", func(t *testing.T) {
+		var calls []string
+		c := mysql.Client{
+			Exec: func(sql string) (string, error) {
+				calls = append(calls, strings.TrimSpace(sql))
+				if strings.Contains(sql, "information_schema.tables") {
+					return "orders\nusers", nil
+				}
+				return "", nil
+			},
+		}
+
+		if err := c.Rename("app", "app-deadbeef"); err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != 3 {
+			t.Fatalf("expected 3 exec calls (terminate, listTables, batch rename), got %d: %v", len(calls), calls)
+		}
+		wantRename := "RENAME TABLE `app`.`orders` TO `app-deadbeef`.`orders`, `app`.`users` TO `app-deadbeef`.`users`;"
+		if !strings.Contains(calls[2], wantRename) || !strings.Contains(calls[2], "DROP DATABASE IF EXISTS `app`;") {
+			t.Fatalf("unexpected rename batch:\n%s", calls[2])
+		}
+	})
 }
 
 func TestInitOutsideGit(t *testing.T) {

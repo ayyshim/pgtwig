@@ -157,19 +157,28 @@ func (c Client) Rename(from, to string) error {
 	if err := c.Terminate(from); err != nil {
 		return err
 	}
-	if _, err := c.execSQL(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s;\n", QuoteIdent(to))); err != nil {
-		return err
-	}
+
 	tables, err := c.listTables(from)
 	if err != nil {
 		return err
 	}
-	for _, name := range tables {
-		if _, err := c.execSQL(fmt.Sprintf("RENAME TABLE %s.%s TO %s.%s;\n", QuoteIdent(from), QuoteIdent(name), QuoteIdent(to), QuoteIdent(name))); err != nil {
-			return err
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "CREATE DATABASE IF NOT EXISTS %s;\n", QuoteIdent(to))
+
+	if len(tables) > 0 {
+		pairs := make([]string, 0, len(tables))
+		fromQ, toQ := QuoteIdent(from), QuoteIdent(to)
+		for _, t := range tables {
+			tq := QuoteIdent(t)
+			pairs = append(pairs, fmt.Sprintf("%s.%s TO %s.%s", fromQ, tq, toQ, tq))
 		}
+		fmt.Fprintf(&b, "RENAME TABLE %s;\n", strings.Join(pairs, ", "))
 	}
-	_, err = c.execSQL(fmt.Sprintf("DROP DATABASE IF EXISTS %s;\n", QuoteIdent(from)))
+
+	fmt.Fprintf(&b, "DROP DATABASE IF EXISTS %s;\n", QuoteIdent(from))
+
+	_, err = c.execSQL(b.String())
 	return err
 }
 
