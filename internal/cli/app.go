@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"pgtwig/internal/git"
+	"pgtwig/internal/mysql"
 	"pgtwig/internal/pg"
 )
 
@@ -24,12 +25,23 @@ type Git interface {
 	IsAncestor(prevSHA, newSHA string) bool
 }
 
+type Database interface {
+	Exists(string) (bool, error)
+	List() (map[string]bool, error)
+	ListPrefix(string) ([]string, error)
+	Terminate(string) error
+	Drop(string) error
+	Rename(string, string) error
+	Clone(string, string) error
+}
+
 type App struct {
 	Git    Git
 	In     io.Reader
 	Out    io.Writer
 	ErrOut io.Writer
 	PG     func(cfg git.Config) pg.Client
+	MySQL  func(cfg git.Config) mysql.Client
 	Docker func(container string) (bool, error)
 }
 
@@ -39,92 +51,65 @@ func NewApp() *App {
 		In:     os.Stdin,
 		Out:    os.Stdout,
 		ErrOut: os.Stderr,
-		PG: func(cfg git.Config) pg.Client {
-			return pg.Client{User: cfg.User, Container: cfg.Container}
-		},
+		PG: func(cfg git.Config) pg.Client { return pg.Client{User: cfg.User, Container: cfg.Container} },
+		MySQL: func(cfg git.Config) mysql.Client { return mysql.Client{User: cfg.User, Container: cfg.Container} },
 		Docker: pg.ContainerRunning,
 	}
 }
 
 func (a *App) Run(args []string) int {
-	if len(args) == 0 {
-		a.printHelp(a.Out)
-		return 0
-	}
-
+	if len(args) == 0 { a.printHelp(a.Out); return 0 }
 	var err error
 	switch args[0] {
-	case "-h", "--help", "help":
-		a.printHelp(a.Out)
-		return 0
-	case "init":
-		err = a.cmdInit(args[1:])
-	case "list":
-		err = a.cmdList(args[1:])
-	case "reset":
-		err = a.cmdReset(args[1:])
-	case "clean":
-		err = a.cmdClean(args[1:])
-	case "_hook":
-		err = a.cmdHook(args[1:])
+	case "-h", "--help", "help": a.printHelp(a.Out); return 0
+	case "init": err = a.cmdInit(args[1:])
+	case "list": err = a.cmdList(args[1:])
+	case "reset": err = a.cmdReset(args[1:])
+	case "clean": err = a.cmdClean(args[1:])
+	case "_hook": err = a.cmdHook(args[1:])
 	default:
 		fmt.Fprintf(a.ErrOut, "Error: unknown command %q\n\n", args[0])
 		a.printHelp(a.ErrOut)
 		return 2
 	}
-
-	if err != nil {
-		fmt.Fprintf(a.ErrOut, "Error: %v\n", err)
-		return 1
-	}
+	if err != nil { fmt.Fprintf(a.ErrOut, "Error: %v\n", err); return 1 }
 	return 0
 }
 
 func (a *App) parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 	fs.SetOutput(a.Out)
-
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, nil
-		}
+		if errors.Is(err, flag.ErrHelp) { return true, nil }
 		return false, err
 	}
-
-	if fs.NArg() > 0 {
-		return false, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
-	}
-
+	if fs.NArg() > 0 { return false, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " ")) }
 	return false, nil
 }
 
-func (a *App) openPG(cfg git.Config) (pg.Client, error) {
+func (a *App) openPG(cfg git.Config) (Database, error) {
 	if cfg.Container != "" {
 		running, err := a.Docker(cfg.Container)
-		if err != nil {
-			return pg.Client{}, fmt.Errorf("check container %s: %w", cfg.Container, err)
-		}
-		if !running {
-			return pg.Client{}, fmt.Errorf("container %s is not running", cfg.Container)
-		}
+		if err != nil { return nil, fmt.Errorf("check container %s: %w", cfg.Container, err) }
+		if !running { return nil, fmt.Errorf("container %s is not running", cfg.Container) }
 	}
-
-	return a.PG(cfg), nil
+	if cfg.Driver == "mysql" {
+		if a.MySQL != nil { return a.MySQL(cfg), nil }
+		return mysql.Client{User: cfg.User, Container: cfg.Container}, nil
+	}
+	if a.PG != nil { return a.PG(cfg), nil }
+	return pg.Client{User: cfg.User, Container: cfg.Container}, nil
 }
 
 func (a *App) confirm(prompt string) (bool, error) {
 	fmt.Fprintf(a.Out, "%s [y/N]: ", prompt)
-
 	line, err := bufio.NewReader(a.In).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, err
-	}
-
+	if err != nil && !errors.Is(err, io.EOF) { return false, err }
 	ans := strings.ToLower(strings.TrimSpace(line))
 	return ans == "y" || ans == "yes", nil
 }
 
 func (a *App) printHelp(w io.Writer) {
-	fmt.Fprint(w, `pgtwig - local PostgreSQL branching tied to Git branches
+	fmt.Fprint(w, `pgtwig - local PostgreSQL and MySQL branching tied to Git branches
 
 Usage:
   pgtwig <command> [flags]
@@ -136,6 +121,6 @@ Commands:
   clean   Drop orphaned branch databases
 
 Run 'pgtwig <command> --help' for command options.
-Set PGTWIG_PGPASSWORD if your container or local Postgres needs a password.
+Set PGTWIG_PGPASSWORD for PostgreSQL or PGTWIG_MYSQL_PASSWORD for MySQL.
 `)
 }

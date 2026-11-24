@@ -1,0 +1,19 @@
+package git
+
+const (
+	KeyDBName        = "pgtwig.dbname"
+	KeyDefaultBranch = "pgtwig.defaultbranch"
+	KeyCurrentBranch = "pgtwig.currentbranch"
+	KeyDriver        = "pgtwig.driver"
+	KeyUser          = "pgtwig.user"
+	KeyContainer     = "pgtwig.container"
+)
+
+type Config struct {
+	DBName        string
+	DefaultBranch string
+	CurrentBranch string
+	Driver        string
+	User          string
+	Container     string
+}
